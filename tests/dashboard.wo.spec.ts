@@ -43,6 +43,81 @@ async function readFilteredListTotal(page: Page): Promise<number> {
   return match ? Number(match[1]) : 0;
 }
 
+type ChartFiber = {
+  stateNode?: {
+    getEchartsInstance?: () => {
+      getOption: () => {
+        series?: { name?: string; data?: unknown[] }[];
+      };
+    };
+  };
+  return?: ChartFiber | null;
+};
+
+async function readPlanVsActualChart(
+  page: Page,
+): Promise<{ plan: number; actual: number }> {
+  const section = page
+    .getByRole("heading", { name: "Work Order", exact: true, level: 3 })
+    .locator("xpath=ancestor::section[1]");
+
+  await expect(section.locator("canvas")).toBeVisible();
+
+  return section.evaluate((root) => {
+    const toNumber = (point: unknown): number => {
+      if (typeof point === "number") {
+        return point;
+      }
+
+      if (
+        point !== null &&
+        typeof point === "object" &&
+        "value" in point &&
+        typeof (point as { value: unknown }).value === "number"
+      ) {
+        return (point as { value: number }).value;
+      }
+
+      return Number(point);
+    };
+
+    const el = root.querySelector(".echarts-for-react");
+    if (!el) {
+      throw new Error("Chart Actual vs Plan tidak ditemukan");
+    }
+
+    const reactKey = Object.keys(el).find(
+      (key) =>
+        key.startsWith("__reactFiber") ||
+        key.startsWith("__reactInternalInstance"),
+    );
+    if (!reactKey) {
+      throw new Error("React fiber chart tidak ditemukan");
+    }
+
+    let fiber: ChartFiber | null = (
+      el as unknown as Record<string, ChartFiber>
+    )[reactKey];
+    for (let index = 0; index < 40 && fiber; index += 1) {
+      const chart = fiber.stateNode?.getEchartsInstance?.();
+      if (chart) {
+        const series = chart.getOption().series ?? [];
+        const planSeries = series.find((item) => item.name === "Plan");
+        const actualSeries = series.find((item) => item.name === "Actual");
+
+        return {
+          plan: toNumber(planSeries?.data?.[0]),
+          actual: toNumber(actualSeries?.data?.[0]),
+        };
+      }
+
+      fiber = fiber.return ?? null;
+    }
+
+    throw new Error("Instance ECharts tidak ditemukan");
+  });
+}
+
 test.describe("Work Order Dashboard", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/dashboard/work-order/");
@@ -104,6 +179,32 @@ test.describe("Work Order Dashboard", () => {
     await expect(
       byCategory.getByRole("button", { name: "Equipment" }),
     ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("chart Actual vs Plan: Plan sama total WO dan Actual sama Closed", async ({
+    page,
+  }) => {
+    const workflowStatuses = [
+      "Open",
+      "Ready To Work",
+      "In Progress",
+      "Closed",
+    ] as const;
+
+    let totalWo = 0;
+    for (const status of workflowStatuses) {
+      totalWo += await readCountBesideLabel(page, status);
+    }
+
+    const closedWo = await readCountBesideLabel(page, "Closed");
+    const chart = await readPlanVsActualChart(page);
+
+    expect
+      .soft(chart.plan, "Plan chart harus sama dengan total WO")
+      .toBe(totalWo);
+    expect
+      .soft(chart.actual, "Actual chart harus sama dengan total Closed WO")
+      .toBe(closedWo);
   });
 
   test("toggle Room pada Work Order By Category", async ({ page }) => {

@@ -47,6 +47,7 @@ type ChartFiber = {
   stateNode?: {
     getEchartsInstance?: () => {
       getOption: () => {
+        xAxis?: { data?: unknown[] }[];
         series?: { name?: string; data?: unknown[] }[];
       };
     };
@@ -59,10 +60,47 @@ async function readPlanVsActualChart(
 ): Promise<{ plan: number; actual: number }> {
   const section = page
     .getByRole("heading", { name: "Work Order", exact: true, level: 3 })
-    .locator("xpath=ancestor::section[1]");
+    .locator("xpath=ancestor::*[.//canvas][1]");
 
   await expect(section.locator("canvas")).toBeVisible();
 
+  const option = await readEchartsSeries(section);
+  const planSeries = option.series.find((item) => item.name === "Plan");
+  const actualSeries = option.series.find((item) => item.name === "Actual");
+
+  return {
+    plan: planSeries?.data[0] ?? Number.NaN,
+    actual: actualSeries?.data[0] ?? Number.NaN,
+  };
+}
+
+async function readTaskByTypeChart(page: Page): Promise<{
+  categories: string[];
+  totals: number[];
+}> {
+  const section = page
+    .getByRole("heading", {
+      name: "Task by Room/Equipment/Other",
+      exact: true,
+      level: 3,
+    })
+    .locator("xpath=ancestor::*[.//canvas][1]");
+
+  await expect(section.locator("canvas")).toBeVisible();
+
+  const option = await readEchartsSeries(section);
+  const totalSeries = option.series.find((item) => item.name === "Total");
+
+  return {
+    categories: option.categories,
+    totals: totalSeries?.data ?? [],
+  };
+}
+
+async function readEchartsSeries(section: Locator): Promise<{
+  categories: string[];
+  series: { name: string; data: number[] }[];
+}> {
   return section.evaluate((root) => {
     const toNumber = (point: unknown): number => {
       if (typeof point === "number") {
@@ -83,7 +121,7 @@ async function readPlanVsActualChart(
 
     const el = root.querySelector(".echarts-for-react");
     if (!el) {
-      throw new Error("Chart Actual vs Plan tidak ditemukan");
+      throw new Error("Chart tidak ditemukan");
     }
 
     const reactKey = Object.keys(el).find(
@@ -101,13 +139,16 @@ async function readPlanVsActualChart(
     for (let index = 0; index < 40 && fiber; index += 1) {
       const chart = fiber.stateNode?.getEchartsInstance?.();
       if (chart) {
-        const series = chart.getOption().series ?? [];
-        const planSeries = series.find((item) => item.name === "Plan");
-        const actualSeries = series.find((item) => item.name === "Actual");
+        const option = chart.getOption();
+        const xAxis = option.xAxis?.[0]?.data ?? [];
+        const series = (option.series ?? []).map((item) => ({
+          name: item.name ?? "",
+          data: (item.data ?? []).map(toNumber),
+        }));
 
         return {
-          plan: toNumber(planSeries?.data?.[0]),
-          actual: toNumber(actualSeries?.data?.[0]),
+          categories: xAxis.map((label) => String(label)),
+          series,
         };
       }
 
@@ -158,17 +199,13 @@ test.describe("Work Order Dashboard", () => {
     }
   });
 
-  test("widget chart", async ({ page }) => {
+  test("Work Order - Actual vs Plan", async ({ page }) => {
     const actualVsPlan = chartSection(page, "Work Order");
-    const byCategory = chartSection(page, "Work Order By Category");
 
     await expect(
       page.getByRole("heading", { name: "Work Order", exact: true, level: 3 }),
     ).toBeVisible();
     await expect(mainArea(page).getByText("Actual vs Plan")).toBeVisible();
-    await expect(
-      page.getByRole("heading", { name: "Work Order By Category" }),
-    ).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "Top 10 Inspector" }),
     ).toBeVisible();
@@ -182,9 +219,6 @@ test.describe("Work Order Dashboard", () => {
 
     await expect(
       actualVsPlan.getByRole("button", { name: "All", exact: true }),
-    ).toHaveAttribute("aria-pressed", "true");
-    await expect(
-      byCategory.getByRole("button", { name: "Equipment" }),
     ).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -241,16 +275,37 @@ test.describe("Work Order Dashboard", () => {
     await expect(equipmentTab).toHaveAttribute("aria-pressed", "false");
   });
 
-  test("toggle Room pada Work Order By Category", async ({ page }) => {
-    const byCategory = chartSection(page, "Work Order By Category");
-    const equipment = byCategory.getByRole("button", { name: "Equipment" });
-    const room = byCategory.getByRole("button", { name: "Room" });
+  test("Task by Room/Equipment/Other - Total", async ({ page }) => {
+    const heading = page.getByRole("heading", {
+      name: "Task by Room/Equipment/Other",
+      exact: true,
+      level: 3,
+    });
+    const byTask = heading.locator("..");
 
-    await room.click();
+    await expect(heading).toBeVisible();
+    await expect(byTask.getByText("Total", { exact: true })).toBeVisible();
 
-    await expect(room).toHaveAttribute("aria-pressed", "true");
-    await expect(equipment).toHaveAttribute("aria-pressed", "false");
-    await expect(mainArea(page).getByText("User Category · Room")).toBeVisible();
+    const workflowStatuses = [
+      "Open",
+      "Ready To Work",
+      "In Progress",
+      "Closed",
+    ] as const;
+
+    let totalWo = 0;
+    for (const status of workflowStatuses) {
+      totalWo += await readCountBesideLabel(page, status);
+    }
+
+    const chart = await readTaskByTypeChart(page);
+
+    expect(chart.categories).toEqual(["Room", "Equipment", "Other"]);
+    expect(chart.totals).toHaveLength(3);
+    expect(
+      chart.totals.reduce((sum, value) => sum + value, 0),
+      "Total bar Room + Equipment + Other harus sama dengan total WO",
+    ).toBe(totalWo);
   });
 
   test("tabel WO terbaru", async ({ page }) => {

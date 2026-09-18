@@ -173,17 +173,43 @@ test.describe("Work Order Dashboard", () => {
       page.getByRole("heading", { name: "Top 10 Inspector" }),
     ).toBeVisible();
 
+    const planTabs = ["All", "Equipment", "Room"] as const;
+    for (const tab of planTabs) {
+      await expect(
+        actualVsPlan.getByRole("button", { name: tab, exact: true }),
+      ).toBeVisible();
+    }
+
     await expect(
-      actualVsPlan.getByRole("button", { name: "Equipment" }),
+      actualVsPlan.getByRole("button", { name: "All", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
     await expect(
       byCategory.getByRole("button", { name: "Equipment" }),
     ).toHaveAttribute("aria-pressed", "true");
   });
 
-  test("chart Actual vs Plan: Plan sama total WO dan Actual sama Closed", async ({
+  test("chart Actual vs Plan: tab All menampilkan total WO", async ({
     page,
   }) => {
+    const actualVsPlan = chartSection(page, "Work Order");
+    const allTab = actualVsPlan.getByRole("button", {
+      name: "All",
+      exact: true,
+    });
+    const equipmentTab = actualVsPlan.getByRole("button", {
+      name: "Equipment",
+      exact: true,
+    });
+    const roomTab = actualVsPlan.getByRole("button", {
+      name: "Room",
+      exact: true,
+    });
+
+    await expect(allTab).toBeVisible();
+    await expect(equipmentTab).toBeVisible();
+    await expect(roomTab).toBeVisible();
+    await expect(allTab).toHaveAttribute("aria-pressed", "true");
+
     const workflowStatuses = [
       "Open",
       "Ready To Work",
@@ -200,11 +226,19 @@ test.describe("Work Order Dashboard", () => {
     const chart = await readPlanVsActualChart(page);
 
     expect
-      .soft(chart.plan, "Plan chart harus sama dengan total WO")
+      .soft(chart.plan, "Plan tab All harus sama dengan total WO")
       .toBe(totalWo);
     expect
-      .soft(chart.actual, "Actual chart harus sama dengan total Closed WO")
+      .soft(chart.actual, "Actual tab All harus sama dengan total Closed WO")
       .toBe(closedWo);
+
+    await equipmentTab.click();
+    await expect(equipmentTab).toHaveAttribute("aria-pressed", "true");
+    await expect(allTab).toHaveAttribute("aria-pressed", "false");
+
+    await roomTab.click();
+    await expect(roomTab).toHaveAttribute("aria-pressed", "true");
+    await expect(equipmentTab).toHaveAttribute("aria-pressed", "false");
   });
 
   test("toggle Room pada Work Order By Category", async ({ page }) => {
